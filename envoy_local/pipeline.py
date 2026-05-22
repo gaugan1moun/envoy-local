@@ -1,50 +1,58 @@
-"""High-level pipeline: load → validate → build → render."""
+"""High-level pipeline: load → validate → render → (optionally snapshot)."""
 
-import logging
+from __future__ import annotations
+
 from pathlib import Path
 from typing import Optional
 
-from envoy_local.loader import load_config
-from envoy_local.validator import validate_config
 from envoy_local.builder import build_bootstrap
-from envoy_local.renderer import write_yaml, print_yaml
-
-logger = logging.getLogger(__name__)
+from envoy_local.loader import load_config
+from envoy_local.renderer import render_yaml, write_yaml
+from envoy_local.snapshotter import DEFAULT_SNAPSHOT_DIR, save_snapshot
+from envoy_local.validator import validate_config
 
 
 def run_pipeline(
-    source: Path,
-    output: Optional[Path] = None,
-    *,
-    strict: bool = True,
+    input_path: str,
+    output_path: Optional[str] = None,
+    snapshot_name: Optional[str] = None,
+    snapshot_dir: Path = DEFAULT_SNAPSHOT_DIR,
+    print_output: bool = False,
 ) -> str:
-    """Load *source*, validate, build bootstrap, and render to YAML string.
+    """
+    Execute the full config pipeline.
 
-    If *output* is given the YAML is also written to that file.
-    Raises ``ValidationError`` when *strict* is True (default).
+    1. Load config from *input_path* (YAML or JSON).
+    2. Validate all clusters, routes, and listeners.
+    3. Build the Envoy bootstrap structure.
+    4. Render to YAML.
+    5. Optionally write to *output_path*.
+    6. Optionally save a named snapshot.
+
     Returns the rendered YAML string.
     """
-    logger.debug("Loading config from %s", source)
-    config = load_config(source)
+    config = load_config(input_path)
 
-    clusters = config["clusters"]
-    listeners = config["listeners"]
+    errors = validate_config(config)
+    if errors:
+        messages = "\n".join(f"  - {e}" for e in errors)
+        raise ValueError(f"Config validation failed:\n{messages}")
 
-    if strict:
-        logger.debug("Validating config")
-        errors = validate_config(clusters=clusters, listeners=listeners)
-        if errors:
-            from envoy_local.validator import ValidationError
-            raise ValidationError("\n".join(str(e) for e in errors))
+    bootstrap = build_bootstrap(config)
+    yaml_str = render_yaml(bootstrap)
 
-    logger.debug("Building bootstrap")
-    bootstrap = build_bootstrap(clusters=clusters, listeners=listeners)
+    if print_output:
+        print(yaml_str)
 
-    if output:
-        logger.info("Writing rendered config to %s", output)
-        write_yaml(bootstrap, output)
-    else:
-        print_yaml(bootstrap)
+    if output_path:
+        write_yaml(bootstrap, output_path)
 
-    from envoy_local.renderer import render_yaml
-    return render_yaml(bootstrap)
+    if snapshot_name:
+        save_snapshot(
+            snapshot_name,
+            yaml_str,
+            directory=snapshot_dir,
+            metadata={"source": input_path},
+        )
+
+    return yaml_str
