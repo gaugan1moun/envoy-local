@@ -29,9 +29,17 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _validate_min_score(parser: argparse.ArgumentParser, value: float) -> None:
+    """Validate that --min-score is within the acceptable 0-100 range."""
+    if not (0.0 <= value <= 100.0):
+        parser.error(f"--min-score must be between 0 and 100, got {value}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    _validate_min_score(parser, args.min_score)
 
     try:
         cfg = load_config(args.config)
